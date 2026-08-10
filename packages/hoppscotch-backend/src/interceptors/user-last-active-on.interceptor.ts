@@ -14,6 +14,35 @@ import { UserService } from 'src/user/user.service';
 export class UserLastActiveOnInterceptor implements NestInterceptor {
   constructor(private userService: UserService) {}
 
+  private readonly userRecentUpdateMap = new Map<string, number>();
+  private readonly DEBOUNCE_MS = 60_000;
+
+  private shouldUpdate(userUid: string): boolean {
+    const userRecentUpdate = this.userRecentUpdateMap.get(userUid) ?? 0;
+    const now = Date.now();
+    if (now - userRecentUpdate < this.DEBOUNCE_MS) {
+      return false;
+    }
+    this.userRecentUpdateMap.set(userUid, now);
+    return true;
+  }
+
+  /**
+   * Fire-and-forget update of the user's last-active timestamp.
+   *
+   * No-ops unless the request has an authenticated user (`user?.uid`) and the
+   * debounce window has elapsed (`shouldUpdate`), so a given user triggers at
+   * most one DB write per `DEBOUNCE_MS`. The underlying update is not awaited;
+   * `userService.updateUserLastActiveOn` handles its own errors internally.
+   *
+   * @param user The authenticated user from the request, if any.
+   */
+  private updateUserLastActive(user: AuthUser) {
+    if (user?.uid && this.shouldUpdate(user.uid)) {
+      this.userService.updateUserLastActiveOn(user.uid);
+    }
+  }
+
   intercept(context: ExecutionContext, next: CallHandler): Observable<any> {
     if (context.getType() === 'http') {
       return this.restHandler(context, next);
@@ -28,14 +57,10 @@ export class UserLastActiveOnInterceptor implements NestInterceptor {
 
     return next.handle().pipe(
       tap(() => {
-        if (user && typeof user === 'object') {
-          this.userService.updateUserLastActiveOn(user.uid);
-        }
+        this.updateUserLastActive(user);
       }),
       catchError((error) => {
-        if (user && typeof user === 'object') {
-          this.userService.updateUserLastActiveOn(user.uid);
-        }
+        this.updateUserLastActive(user);
         return throwError(() => error);
       }),
     );
@@ -50,14 +75,10 @@ export class UserLastActiveOnInterceptor implements NestInterceptor {
 
     return next.handle().pipe(
       tap(() => {
-        if (user && typeof user === 'object') {
-          this.userService.updateUserLastActiveOn(user.uid);
-        }
+        this.updateUserLastActive(user);
       }),
       catchError((error) => {
-        if (user && typeof user === 'object') {
-          this.userService.updateUserLastActiveOn(user.uid);
-        }
+        this.updateUserLastActive(user);
         return throwError(() => error);
       }),
     );
